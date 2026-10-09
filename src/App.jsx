@@ -8,7 +8,7 @@ import { questionFromText, extractPdfText } from './lib/pdfParser'
 import { scoreTest } from './lib/scoring'
 import { loadState, saveState } from './lib/storage'
 import { extractQuestionsWithGemini, studyApiUrl } from './lib/geminiParser'
-import { hasSavedToken, removeSavedToken, saveEncryptedToken, unlockToken } from './lib/tokenVault'
+import { getSavedToken, hasSavedToken, removeSavedToken, saveEncryptedToken, unlockToken } from './lib/tokenVault'
 
 const paperAssets = import.meta.glob('../*.pdf', { eager: true, query: '?url', import: 'default' })
 
@@ -21,7 +21,7 @@ const sampleQuestions = [
 const formatTime = (seconds) => `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`
 
 function App() {
-  const [geminiToken, setGeminiToken] = useState(null)
+  const [geminiToken, setGeminiToken] = useState(() => getSavedToken())
   const [hasSavedGeminiToken, setHasSavedGeminiToken] = useState(() => hasSavedToken())
   const [state, setState] = useState(loadState)
   const [setup, setSetup] = useState({ title: 'SSC CHSL Focus Set', minutes: 30 })
@@ -186,6 +186,22 @@ function App() {
     if (!file) return
     const reader = new FileReader(); reader.onload = () => setNote((previous) => ({ ...previous, image: reader.result })); reader.readAsDataURL(file)
   }
+  const openPaper = async (paper) => {
+    setImportLoading(true); setImportStage(`Reading ${paper.title}...`); setImportStatus('')
+    try {
+      const response = await fetch(paper.url)
+      if (!response.ok) throw new Error(`Could not load ${paper.file} (${response.status}).`)
+      const text = await extractPdfText(await response.blob())
+      const imported = await extractQuestionsWithGemini(text, paper.title, geminiToken, ({ completed, total }) => setImportStage(`Loading ${paper.title}: batch ${completed} of ${total}...`))
+      if (!imported.length) throw new Error('No exam questions were found in this paper.')
+      startTest(imported, paper.title)
+    } catch (error) {
+      setImportStatus(error.message)
+      setState((previous) => ({ ...previous, view: 'library' }))
+    } finally {
+      setImportLoading(false); setImportStage('')
+    }
+  }
 
   return <div className={`app-shell ${state.theme}`}>
     <aside className="sidebar">
@@ -201,29 +217,13 @@ function App() {
       {state.view === 'test' && <><TestRunner active={active} current={current} setCurrent={setCurrent} questions={questions} currentQuestion={currentQuestion} answers={answers} setAnswers={setAnswers} finishTest={finishTest} submitLoading={submitLoading} reviewAnswers={reviewAnswers} aiReview={aiReview} reviewLoading={reviewLoading} /><QuestionHelp solution={questionSolution} loading={solutionLoading} explain={explainCurrentQuestion} /></>}
       {state.view === 'results' && <Results result={lastResult} aiReview={aiReview} reviewAnswers={reviewAnswers} reviewLoading={reviewLoading} navigate={navigate} />}
       {state.view === 'history' && <History results={state.results || []} openResult={openHistoryResult} navigate={navigate} />}
-      {state.view === 'library' && <Library navigate={navigate} openPaper={openPaper} />}
+      {state.view === 'library' && <Library navigate={navigate} openPaper={openPaper} importStatus={importStatus} />}
       {state.view === 'notes' && <Notes note={note} setNote={setNote} addNote={addNote} attachImage={attachImage} state={state} />}
       {state.view === 'ask' && <><div className="chat-toolbar"><button className="quiet-button" onClick={() => setState((previous) => ({ ...previous, chat: [] }))}>＋ New chat</button></div><AskAI chat={state.chat || []} input={chatInput} setInput={setChatInput} ask={askStudyCoach} loading={chatLoading} tokens={state.apiTokens || []} activeTokenId={activeTokenId} setActiveTokenId={setActiveTokenId} tokenForm={tokenForm} setTokenForm={setTokenForm} saveToken={saveToken} removeToken={removeToken} /></>}
     </main>
     {importLoading && <div className="import-overlay" role="status"><div className="loader-orbit"><span /></div><strong>{importStage}</strong><p>Long papers are processed in small parallel batches.</p></div>}
   </div>
 }
-  const openPaper = async (paper) => {
-    setImportLoading(true); setImportStage(`Reading ${paper.title}...`)
-    try {
-      const response = await fetch(paper.url)
-      const text = await extractPdfText(await response.blob())
-      const imported = await extractQuestionsWithGemini(text, paper.title, geminiToken, ({ completed, total }) => setImportStage(`Loading ${paper.title}: batch ${completed} of ${total}...`))
-      if (!imported.length) throw new Error('No exam questions were found in this paper.')
-      startTest(imported, paper.title)
-    } catch (error) {
-      setImportStatus(error.message)
-      setState((previous) => ({ ...previous, view: 'library' }))
-    } finally {
-      setImportLoading(false); setImportStage('')
-    }
-  }
-
 function TokenLogin({ hasSavedToken, onLogin, onRemove }) {
   const [token, setToken] = useState('')
   const [remember, setRemember] = useState(true)
@@ -280,12 +280,12 @@ function paperDetails(file, url) {
   return { file, url, title: `${day} ${month}${year ? ` ${year}` : ''} · Shift ${shift}${detail}` }
 }
 
-function Library({ navigate, openPaper }) {
+function Library({ navigate, openPaper, importStatus }) {
   const papers = Object.entries(paperAssets).map(([path, url]) => {
     const file = path.split('/').pop()
     return paperDetails(file, url)
   }).sort((first, second) => second.file.localeCompare(first.file))
-  return <div className="library-page"><div className="library-intro"><span className="eyebrow coral">THE ARCHIVE</span><h2>Previous year papers,<br /><em>without the noise.</em></h2><p>Practice what has actually appeared. No prediction, no invented questions.</p></div><div className="paper-list">{papers.map((paper, index) => <article className="paper-row" key={paper.file}><span className="paper-year">{String(index + 1).padStart(2, '0')}</span><div><h3>{paper.title}</h3><p>{paper.file} · Gemini extracts questions when opened</p></div><button className="text-button" onClick={() => openPaper(paper)}>Practice paper <span>→</span></button></article>)}</div><button className="quiet-button" onClick={() => navigate('dashboard')}>← Back to overview</button></div>
+  return <div className="library-page"><div className="library-intro"><span className="eyebrow coral">THE ARCHIVE</span><h2>Previous year papers,<br /><em>without the noise.</em></h2><p>Practice what has actually appeared. No prediction, no invented questions.</p></div>{importStatus && <p className="import-status">{importStatus}</p>}<div className="paper-list">{papers.map((paper, index) => <article className="paper-row" key={paper.file}><span className="paper-year">{String(index + 1).padStart(2, '0')}</span><div><h3>{paper.title}</h3><p>{paper.file} · Gemini extracts questions when opened</p></div><button className="text-button" onClick={() => openPaper(paper)}>Practice paper <span>→</span></button></article>)}</div><button className="quiet-button" onClick={() => navigate('dashboard')}>← Back to overview</button></div>
 }
 
 function Notes({ note, setNote, addNote, attachImage, state }) { return <div className="notes-page"><div className="section-heading"><div><span className="eyebrow coral">YOUR MARGIN</span><h2>Capture the useful bits</h2></div></div><section className="note-composer"><input placeholder="Note title" value={note.title} onChange={(event) => setNote({ ...note, title: event.target.value })} /><textarea placeholder="Write a shortcut, explanation, or reminder..." value={note.body} onChange={(event) => setNote({ ...note, body: event.target.value })} /><div className="composer-actions"><label className="text-button">Add screenshot <input type="file" accept="image/*" hidden onChange={attachImage} /></label>{note.image && <img className="thumb" src={note.image} alt="Note attachment preview" />}<button className="primary-button small" onClick={addNote}>Save note</button></div></section><div className="saved-notes">{state.notes.map((item) => <article className="saved-note" key={item.id}><span className="eyebrow">{new Date(item.createdAt).toLocaleDateString()}</span><h3>{item.title || 'Untitled note'}</h3><p>{item.body}</p>{item.image && <img src={item.image} alt="Attached study screenshot" />}</article>)}</div></div> }
