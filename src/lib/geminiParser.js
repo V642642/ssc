@@ -46,6 +46,6 @@ export async function extractQuestionsWithGemini(text, title, apiKey, onProgress
 }
 
 export function studyApiUrl(path) {
-  const localPath = path === 'ask-ai' ? 'ask' : path
+  const localPath = import.meta.env.DEV && path === 'ask-ai' ? 'ask' : path
   return `${apiBase}/${localPath}`
 }
