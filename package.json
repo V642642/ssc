@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "server": "node --env-file=.env server.mjs",
-    "build": "vite build",
+    "build": "rm -rf dist && vite build",
     "lint": "oxlint",
     "preview": "vite preview"
   },
