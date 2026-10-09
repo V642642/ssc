@@ -1,0 +1,1 @@
+export { handler } from './ask-ai.mjs'
