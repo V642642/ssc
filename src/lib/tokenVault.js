@@ -34,7 +34,16 @@ export async function unlockToken(token) {
 }
 
 export async function saveEncryptedToken(token) {
-  localStorage.setItem(STORAGE_KEY, await encryptToken(token))
+  localStorage.setItem(STORAGE_KEY, JSON.stringify({ token }))
+}
+
+export function getSavedToken() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null')
+    return saved?.token || null
+  } catch {
+    return null
+  }
 }
 
 export function hasSavedToken() {
